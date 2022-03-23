@@ -14,11 +14,13 @@ image: build
 	docker build -t ${IMAGE_REPOSITORY}:${IMAGE_TAG} .
 
 # push latest image with multiple tags
-# only push on linux/amd64 so we don't need to deal with multi-arch images
+# only push linux/amd64 so we don't need to deal with multi-arch images
+# echos the image as an output for use with github actions
 .PHONY: push-latest
 push-latest:
 	docker buildx build --push --platform=linux/amd64 . \
-		-t ${IMAGE_REPOSITORY}:${GIT_COMMIT_COUNT}-${GIT_SHA} \
+		-t ${IMAGE_REPOSITORY}:${IMAGE_TAG} \
 		-t ${IMAGE_REPOSITORY}:${GIT_COMMIT_COUNT} \
 		-t ${IMAGE_REPOSITORY}:${GIT_COMMIT_TIME}-${GIT_SHA} \
 		-t ${IMAGE_REPOSITORY}:latest
+	echo "::set-output name=image::${IMAGE_REPOSITORY}:${IMAGE_TAG}"
