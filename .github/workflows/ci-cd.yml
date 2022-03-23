@@ -1,8 +1,8 @@
-name: CI Build
+name: CI/CD
 on:
   push:
     branches:
-      - master
+      - main
 
 jobs:
   build-image:
@@ -37,7 +37,8 @@ jobs:
         id: push-image
         run: make push-latest
 
-  deploy-image:
+  # Commit new image tag to stage environment
+  deploy-stage:
     needs: build-image
     runs-on: ubuntu-latest
     steps:
@@ -57,3 +58,26 @@ jobs:
           kustomize edit set image ${{ needs.build-image.outputs.image }}
           git commit -a -m "Deploy stage: ${{ needs.build-image.outputs.image }}"
           git push
+
+  # Commit new image tag to prod environment *in a different branch* (so that a PR can be created)
+  deploy-prod:
+    needs: [build-image, deploy-stage]
+    runs-on: ubuntu-latest
+    steps:
+      -
+        uses: webfactory/ssh-agent@v0.5.4
+        with:
+          ssh-private-key: ${{ secrets.GUESTBOOK_DEPLOY_KEY }}
+      -
+        uses: imranismail/setup-kustomize@v1
+      -
+        name: Kustomize
+        run: |
+          git config --global user.name "Deploy Bot"
+          git config --global user.email "no-reply@akuity.io"
+          git clone git@github.com:akuity/guestbook-deploy.git
+          cd guestbook-deploy/env/prod
+          git checkout -B env/prod
+          kustomize edit set image ${{ needs.build-image.outputs.image }}
+          git commit -a -m "Deploy prod: ${{ needs.build-image.outputs.image }}"
+          git push --set-upstream origin env/prod --force
