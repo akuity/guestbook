@@ -7,7 +7,7 @@ COPY go.sum /src/go.sum
 COPY . .
 RUN GOOS=$TARGETOS GOARCH=$TARGETARCH make build
 
-FROM scratch
+FROM alpine:latest
 WORKDIR /app
 COPY --from=builder /src/build/guestbook /app/guestbook
 COPY ./public/index.html public/index.html
