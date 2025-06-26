@@ -1,14 +1,20 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
+	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
-	"github.com/codegangsta/negroni"
 	"github.com/gorilla/mux"
+	"github.com/urfave/negroni"
 	"github.com/xyproto/simpleredis/v2"
 )
 
@@ -19,7 +25,14 @@ var (
 
 	// in-memory guestbook
 	guestbookEntries = make([]string, 0)
+
+	buf    bytes.Buffer
+	logger *log.Logger
 )
+
+func init() {
+	logger = log.New(&buf, "logger: ", log.Lshortfile)
+}
 
 func ListRangeHandler(rw http.ResponseWriter, req *http.Request) {
 	key := mux.Vars(req)["key"]
@@ -31,7 +44,7 @@ func ListRangeHandler(rw http.ResponseWriter, req *http.Request) {
 	} else {
 		membersJSON = HandleError(json.MarshalIndent(guestbookEntries, "", "  ")).([]byte)
 	}
-	rw.Write(membersJSON)
+	_, _ = rw.Write(membersJSON)
 }
 
 func ListPushHandler(rw http.ResponseWriter, req *http.Request) {
@@ -76,6 +89,42 @@ func HandleError(result interface{}, err error) (r interface{}) {
 	return result
 }
 
+// ConsumeMemory is a function that consumes memory in a loop, simulating a memory leak.
+func ConsumeMemory(ctx context.Context) {
+	mbStr := os.Getenv("CONSUME_MEMORY_MB")
+	if mbStr == "" {
+		return
+	}
+	var mb int64
+	mb, err := strconv.ParseInt(mbStr, 10, 64)
+	if err != nil {
+		panic(fmt.Sprintf("Invalid CONSUME_MEMORY_MB value: %s", mbStr))
+	}
+	if mb <= 0 {
+		return
+	}
+	logger.Print("Starting memory consumption with ", mb, " MB\n")
+
+	for i := 0; i < int(mb); i++ {
+		go func(ctx context.Context) {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					// make a memory allocation
+					// this consumes 1mb of memory
+					memory := make([]byte, 1024*1024)
+					time.Sleep(1 * time.Second)
+					fmt.Println("Hello, World!", memory)
+					memory = nil
+				}
+			}
+		}(ctx)
+	}
+	<-ctx.Done()
+}
+
 func main() {
 	redisMaster := flag.String("redis-master", "", "Redis master (e.g. redis-master:6379)")
 	redisReplica := flag.String("redis-replica", "", "Redis replica (e.g. redis-replica:6379)")
@@ -87,6 +136,8 @@ func main() {
 		replicaPool = simpleredis.NewConnectionPoolHost("redis-replica:6379")
 		defer replicaPool.Close()
 	}
+	ctx := context.Background()
+	go ConsumeMemory(ctx)
 
 	r := mux.NewRouter()
 	r.Path("/lrange/{key}").Methods("GET").HandlerFunc(ListRangeHandler)
