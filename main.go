@@ -1,19 +1,15 @@
 package main
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
-	"flag"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/spf13/cobra"
 	"github.com/urfave/negroni"
 	"github.com/xyproto/simpleredis/v2"
 )
@@ -25,14 +21,7 @@ var (
 
 	// in-memory guestbook
 	guestbookEntries = make([]string, 0)
-
-	buf    bytes.Buffer
-	logger *log.Logger
 )
-
-func init() {
-	logger = log.New(&buf, "logger: ", log.Lshortfile)
-}
 
 func ListRangeHandler(rw http.ResponseWriter, req *http.Request) {
 	key := mux.Vars(req)["key"]
@@ -89,63 +78,45 @@ func HandleError(result interface{}, err error) (r interface{}) {
 	return result
 }
 
-// ConsumeMemory is a function that consumes memory in a loop, simulating a memory leak.
-func ConsumeMemory(ctx context.Context) {
-	mbStr := os.Getenv("CONSUME_MEMORY_MB")
-	if mbStr == "" {
-		return
-	}
-	var mb int64
-	mb, err := strconv.ParseInt(mbStr, 10, 64)
-	if err != nil {
-		panic(fmt.Sprintf("Invalid CONSUME_MEMORY_MB value: %s", mbStr))
-	}
-	if mb <= 0 {
-		return
-	}
-	logger.Print("Starting memory consumption with ", mb, " MB\n")
+func NewRootCommand() *cobra.Command {
+	var (
+		port         int64
+		redisMaster  string
+		redisReplica string
+	)
 
-	for i := 0; i < int(mb); i++ {
-		go func(ctx context.Context) {
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-					// make a memory allocation
-					// this consumes 1mb of memory
-					memory := make([]byte, 1024*1024)
-					time.Sleep(1 * time.Second)
-					fmt.Println("Hello, World!", memory)
-					memory = nil
-				}
+	var rootCmd = &cobra.Command{
+		Use:   "guestbook",
+		Short: "Guestbook is a simple web application that allows users to leave messages.",
+		Run: func(cmd *cobra.Command, args []string) {
+			redisEnabled = redisMaster != "" && redisReplica != ""
+			if redisEnabled {
+				masterPool = simpleredis.NewConnectionPoolHost(redisMaster)
+				defer masterPool.Close()
+				replicaPool = simpleredis.NewConnectionPoolHost("redis-replica:6379")
+				defer replicaPool.Close()
 			}
-		}(ctx)
+
+			r := mux.NewRouter()
+			r.Path("/lrange/{key}").Methods("GET").HandlerFunc(ListRangeHandler)
+			r.Path("/rpush/{key}/{value}").Methods("GET").HandlerFunc(ListPushHandler)
+			r.Path("/info").Methods("GET").HandlerFunc(InfoHandler)
+			r.Path("/env").Methods("GET").HandlerFunc(EnvHandler)
+
+			n := negroni.Classic()
+			n.UseHandler(r)
+			n.Run(":" + strconv.FormatInt(port, 10))
+		},
 	}
-	<-ctx.Done()
+	rootCmd.Flags().StringVar(&redisMaster, "redis-master", "", "Redis master (e.g. redis-master:6379)")
+	rootCmd.Flags().StringVar(&redisReplica, "redis-replica", "", "Redis replica (e.g. redis-replica:6379)")
+	rootCmd.Flags().Int64Var(&port, "port", 3000, "Listening port")
+	return rootCmd
 }
 
 func main() {
-	redisMaster := flag.String("redis-master", "", "Redis master (e.g. redis-master:6379)")
-	redisReplica := flag.String("redis-replica", "", "Redis replica (e.g. redis-replica:6379)")
-
-	redisEnabled = *redisMaster != "" && *redisReplica != ""
-	if redisEnabled {
-		masterPool = simpleredis.NewConnectionPoolHost(*redisMaster)
-		defer masterPool.Close()
-		replicaPool = simpleredis.NewConnectionPoolHost("redis-replica:6379")
-		defer replicaPool.Close()
+	cmd := NewRootCommand()
+	if err := cmd.Execute(); err != nil {
+		log.Fatal(err)
 	}
-	ctx := context.Background()
-	go ConsumeMemory(ctx)
-
-	r := mux.NewRouter()
-	r.Path("/lrange/{key}").Methods("GET").HandlerFunc(ListRangeHandler)
-	r.Path("/rpush/{key}/{value}").Methods("GET").HandlerFunc(ListPushHandler)
-	r.Path("/info").Methods("GET").HandlerFunc(InfoHandler)
-	r.Path("/env").Methods("GET").HandlerFunc(EnvHandler)
-
-	n := negroni.Classic()
-	n.UseHandler(r)
-	n.Run(":3000")
 }
